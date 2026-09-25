@@ -1,71 +1,75 @@
-# Dex Automation — Desenho da solução (v0.1, para aprovação)
+# Dex Automation — Desenho da solução (v0.2)
 
-> **Status:** proposta, nada implementado. Itens marcados com **(premissa)** dependem das respostas da §13.
+> **Status:** aguardando aprovação.
+> **O que mudou desde a v0.1:** entraram as respostas sobre operação (operador único, vários clientes), objetivo (ferramenta interna, a NVR vende a implantação), relatório para o cliente e integração com o Dex Provider (API a criar, se não existir).
 
 ---
 
 ## 1. O que é
 
-Ferramenta de automações de mensagens via WhatsApp que opera **sobre o Dex Provider**, que já cuida da conexão dos números. O primeiro caso de uso é portar o fluxo n8n *FIT&LOW – Disparo Mensagens*.
+Ferramenta **interna da NVR** para automações de mensagens via WhatsApp, operando sobre o Dex Provider.
 
-**É:** um motor de automações *opinativo* para disparo. Traz receitas configuráveis (disparo recorrente com IA, disparo em massa, sequências, gatilhos) e já inclui entregabilidade, histórico, opt-out e aprovação.
+- **Um operador** (você) atende **vários clientes**, cada um num *workspace* isolado.
+- **O cliente não acessa a ferramenta.** Ele recebe relatórios: WhatsApp agora, PDF depois.
+- **Primeiro caso de uso:** portar o fluxo n8n *FIT&LOW – Disparo Mensagens*.
 
-**Não é (v1):**
-- um editor visual de nós estilo n8n;
-- um chatbot/atendimento;
-- um gerenciador de conexão WhatsApp (esse papel é do Dex Provider).
+**Não é:**
+- editor visual de nós estilo n8n;
+- chatbot/atendimento;
+- gerenciador de conexão WhatsApp (esse papel é do Dex Provider);
+- produto SaaS: não tem login de cliente, cobrança nem autoatendimento.
+
+**Métricas que guiam as prioridades:**
+1. **Tempo para colocar um cliente novo no ar.** Como você vende implantação, isso é margem.
+2. **Tempo que você gasta por cliente por semana.** A ferramenta fica em silêncio quando tudo dá certo e só chama você nas exceções.
 
 ---
 
 ## 2. Decisões principais
 
-| # | Decisão | Proposta | Por quê | Descartado |
-|---|---|---|---|---|
-| D1 | Como se monta uma automação | **Receitas + etapas configuráveis** (formulário) | 80% dos casos são variações de "ler lista → filtrar → compor → enviar". Um canvas visual leva meses e compete com o n8n, que já existe | Editor de nós tipo n8n |
-| D2 | Execução | **Duas fases:** Preparação (gera tudo) → Disparo (fila com ritmo) | Permite prévia, aprovação e reenvio sem pagar a IA de novo. O ritmo de envio deixa de depender da latência da IA | Gerar e enviar item a item (como hoje) |
-| D3 | Onde fica a lógica | **O código decide, a IA escreve** | Saudação por horário, cruzamento de produtos, concordância de gênero, variação e limite de emojis são regras. Em código saem exatas e baratas; no prompt saem caras e falham às vezes | Prompt gigante fazendo tudo |
-| D4 | Memória de mensagens | **Log próprio das mensagens enviadas**, com gravação só depois do envio confirmado | Hoje a memória é gravada antes do envio. Se o envio falha, na semana seguinte a IA "varia" em cima de uma mensagem que nunca chegou ao cliente | Postgres Chat Memory do n8n |
-| D5 | Multi-cliente | **Workspace por cliente desde o dia 1** (premissa) | Barato de fazer agora, caro de adicionar depois | Instância única |
-| D6 | Fonte de dados | **Google Sheets como conector**, com validação. A planilha continua sendo a interface do cliente | Não muda a rotina de quem alimenta a planilha | Migrar tudo para o painel já na v1 |
-| D7 | Fila e agenda | **No próprio Postgres** (ex.: pg-boss) | Menos peças para operar (sem Redis). O volume atual é pequeno | Redis + BullMQ |
-| D8 | Stack | **TypeScript/Node + Postgres + painel web, em Docker na VPS** (premissa) | Mesma linguagem do Evolution e do n8n. Ajusto para a stack do Dex Provider se ela for outra | — |
-| D9 | IA | **Provedor plugável** (OpenAI hoje), com chave por workspace | Cada cliente paga o próprio consumo, e trocar de modelo não exige reescrever nada | Acoplar a um provedor |
+| # | Decisão | Proposta | Por quê |
+|---|---|---|---|
+| D1 | Como se monta uma automação | **Receitas + etapas configuráveis** (formulário), sem canvas visual | 80% dos casos são "ler lista → filtrar → compor → enviar". Um canvas leva meses e compete com o n8n |
+| D2 | Execução | **Três fases: Preparação → Disparo → Relatório** | Permite prévia, modo sombra e reenvio sem pagar a IA de novo; o relatório sai do mesmo registro |
+| D3 | Onde fica a lógica | **O código decide, a IA escreve** | Saudação, cruzamento, concordância, variação e emojis são regras. Em código saem exatas e baratas |
+| D4 | Memória de mensagens | **Log próprio das mensagens enviadas**, com gravação só depois do envio confirmado | Elimina o histórico "fantasma" do fluxo atual |
+| D5 | Clientes e acesso | **Workspaces isolados, um login de administrador**, sem permissões | Reflete a operação real: só você usa |
+| D6 | Fonte de dados | **Google Sheets como conector**, com validação | A rotina do cliente não muda |
+| D7 | Fila e agenda | **No próprio Postgres** (pg-boss) | Menos peças para operar |
+| D8 | Canal WhatsApp | **Atrás de um adaptador:** simulado / Dex Provider / Evolution direto | O motor não depende de o Dex Provider estar pronto (§7) |
+| D9 | IA | **Provedor plugável, com chave por workspace**, e custo registrado por execução | O cliente paga o próprio consumo, e você sabe quanto cada cliente custa |
+| D10 | Relatórios | **Resumo por WhatsApp, enviado do número da NVR**; PDF na F2 | O relatório é a prova de valor que o cliente vê (§8) |
+| D11 | Stack | **TypeScript/Node + Postgres + painel web, em Docker na VPS** (premissa) | Mesma linguagem do Evolution e do n8n |
 
 ---
 
 ## 3. Arquitetura
 
 ```
-                ┌──────────────────────── DEX AUTOMATION ────────────────────────┐
- Operador ────► │  Painel web ──► API ◄──────────── webhooks do Dex Provider ◄─┐ │
-                │                  │                (respostas, status)        │ │
-                │  Agenda (cron) ──┼──► Fila (Postgres)                        │ │
-                │                  ▼                                           │ │
-                │       ┌───── Motor de execução (worker) ─────┐               │ │
-                │       │ 1. PREPARAÇÃO                        │               │ │
-                │       │    fontes → filtros → cruzamento     │               │ │
-                │       │    → composição (template | IA)      │               │ │
-                │       │    → validação → [aprovação]         │               │ │
-                │       │ 2. DISPARO                           │               │ │
-                │       │    fila por número · ritmo · janela  │               │ │
-                │       └───────────────┬──────────────────────┘               │ │
-                │   Postgres: automações, execuções, mensagens,                │ │
-                │             contatos, opt-out, auditoria                     │ │
-                └─────────┬─────────────┼──────────────────────────────────────┼─┘
-                          │             │ HTTP + token                         │
-       Google Sheets ◄────┤             ▼                                      │
-       LLM (OpenAI…) ◄────┘       DEX PROVIDER ────────────────────────────────┘
-                                        │
-                                  Evolution API → WhatsApp
+                ┌──────────────────────── DEX AUTOMATION ─────────────────────────┐
+  Você ───────► │  Painel web ──► API ◄───────────── webhooks (F2) ◄────────────┐ │
+                │                  │                                            │ │
+                │  Agenda (cron) ──┼──► Fila (Postgres)                         │ │
+                │                  ▼                                            │ │
+                │       ┌───── Motor de execução (worker) ─────┐                │ │
+                │       │ 1. PREPARAÇÃO  ler, filtrar, cruzar, │                │ │
+                │       │                compor, validar       │                │ │
+                │       │ 2. DISPARO     fila por número,      │                │ │
+                │       │                ritmo, janela         │                │ │
+                │       │ 3. RELATÓRIO   cliente + operador    │                │ │
+                │       └───────────────┬──────────────────────┘                │ │
+                │                       ▼                                       │ │
+                │            Canal WhatsApp (adaptador)                         │ │
+                │     simulado │ Dex Provider (alvo) │ Evolution (plano B)      │ │
+                │                                                               │ │
+                │  Postgres: workspaces, automações, execuções, mensagens,      │ │
+                │            contatos, opt-out, registro de ações               │ │
+                └─────────┬───────────────────┼─────────────────────────────────┼─┘
+                          │                   ▼                                 │
+       Google Sheets ◄────┤             DEX PROVIDER ───────────────────────────┘
+       LLM (OpenAI…) ◄────┘                   │
+                                        Evolution API → WhatsApp
 ```
-
-| Componente | Papel |
-|---|---|
-| Painel web | Lista de automações, ligar/pausar, "rodar agora", prévia (dry-run), aprovação, histórico de execuções e mensagens |
-| API | Cadastro e disparo manual; recebe os webhooks do Dex Provider |
-| Agenda | Dispara execuções no horário, com fuso (`America/Sao_Paulo`) |
-| Worker | Executa as etapas; escala horizontalmente se for preciso |
-| Conectores | Sheets (fonte), Dex Provider (canal), LLM (composição). O Drive entra depois, como fonte e destino |
 
 ---
 
@@ -74,51 +78,53 @@ Ferramenta de automações de mensagens via WhatsApp que opera **sobre o Dex Pro
 ```
 Quarta 10:00 ─► Execução #N criada
  │
- ├─ GUARDAS: automação ativa? chave "ON" na planilha? número conectado no Dex Provider?
- │           Se alguma falhar, a execução é abortada e um alerta é disparado. Nada é enviado.
+ ├─ GUARDAS: automação ativa? chave "ON" na planilha? número conectado?
+ │           Se alguma falhar, a execução é abortada e você recebe um alerta. Nada é enviado.
  │
- ├─ PREPARAÇÃO (minutos)
+ ├─ 1. PREPARAÇÃO (minutos)
  │    ler abas ─► validar cabeçalhos (se alguém renomeou uma coluna, para aqui)
- │    ─► normalizar telefones (E.164) ─► remover quem não tem número, duplicados e opt-out
- │    ─► cruzar preferências × produtos da semana
+ │    ─► normalizar telefones (E.164) ─► tirar quem não tem número, duplicados e opt-out
+ │    ─► cruzar preferências × produtos da semana ─► sem match = pulado (com motivo)
  │    ─► compor com IA a partir de: apelido, produtos (já com gênero), observação,
  │        saudação calculada, variação sorteada, últimas 2 mensagens ENVIADAS
- │    ─► validar (regras) ─► se reprovar, regera 1x ─► se reprovar de novo, "precisa revisão"
- │    Resultado: mensagens "prontas"; cada contato pulado fica com o motivo registrado
+ │    ─► validar ─► se reprovar, regera 1x ─► se reprovar de novo, "precisa revisão" (não envia)
  │
- ├─ [opcional] APROVAÇÃO no painel (F2: prévia enviada para o WhatsApp do dono)
+ ├─ 2. DISPARO (fila do número)
+ │    para cada mensagem: checar número (exists=true) ─► enviar
+ │    intervalo aleatório (ex.: 40–120 s) · só dentro da janela (ex.: 9h–19h)
+ │    status: enviada | falhou (motivo). Só "enviada" entra no histórico
+ │    se a taxa de falha passar do limite ou o número desconectar: pausa + alerta
  │
- └─ DISPARO (fila do número)
-      para cada mensagem: checar número (exists=true) ─► enviar
-      intervalo aleatório (ex.: 40–120 s) · só dentro da janela (ex.: 9h–19h)
-      status: enviada | falhou (motivo). Só "enviada" entra no histórico
-      se a taxa de falha passar do limite ou o número desconectar: pausa + alerta
+ └─ 3. RELATÓRIO
+      para o cliente: resumo por WhatsApp (§8)
+      para você: só se houver exceção
 ```
 
 **Garantias**
-- **Idempotência:** chave `automação + contato + período` (ex.: semana ISO). Reexecutar na mesma semana não reenvia para quem já recebeu.
+- **Idempotência:** chave `automação + contato + período` (semana ISO). Reexecutar na mesma semana não reenvia para quem já recebeu.
 - **Retomada:** se o servidor cair no meio, o disparo continua de onde parou.
-- **Rastreabilidade:** cada mensagem guarda os dados de entrada, a versão do prompt, a saída da IA, o resultado das validações e a resposta do provedor.
+- **Rastreabilidade:** cada mensagem guarda os dados de entrada, a versão do prompt, a saída da IA, o resultado das validações, a resposta do provedor e o custo.
 
 ---
 
 ## 5. Receitas e etapas
 
-Uma automação é formada por **gatilho + fontes + sequência de etapas**. Receitas são automações pré-montadas: o operador só preenche os campos.
+Uma automação é formada por **gatilho + fontes + etapas + relatório**. Receitas são automações pré-montadas: para implantar um cliente novo, você **clona uma receita** e ajusta planilha, prompt e número.
 
 ### Etapas
 
 | Etapa | Fase | O que faz |
 |---|---|---|
-| `fonte.planilha` | F1 | Lê uma aba do Sheets com mapeamento de colunas e validação de cabeçalho |
-| `filtrar` | F1 | Condições simples (vazio/igual/contém), opt-out, teto de frequência |
-| `cruzar` | F1 | Cruza um campo-lista do contato com outra fonte (preferências × produtos), normalizando acentos, caixa e espaços e considerando sinônimos |
-| `compor.ia` | F1 | Prompt + contexto calculado + histórico, com saída estruturada |
-| `validar` | F1 | Regras determinísticas: nº de emojis, termos proibidos, só produtos da lista, diferente da última mensagem |
-| `enviar.whatsapp` | F1 | Envia via Dex Provider, com checagem de número e ritmo |
-| `compor.template` | F2 | Texto com variáveis (`{{apelido}}`) e variações sorteadas. Sem IA, custo zero |
-| `aprovar` | F2 | Segura as mensagens até alguém aprovar |
-| `fonte.contatos` | F2 | Lista nativa de contatos, com tags |
+| `fonte.planilha` | F1a | Lê uma aba do Sheets com mapeamento de colunas e validação de cabeçalho |
+| `filtrar` | F1a | Condições simples, opt-out, teto de frequência |
+| `cruzar` | F1a | Cruza um campo-lista do contato com outra fonte, normalizando acentos, caixa e espaços e considerando sinônimos |
+| `compor.ia` | F1a | Prompt + contexto calculado + histórico |
+| `validar` | F1a | Regras determinísticas: emojis, termos proibidos, só produtos da lista, diferente da última mensagem |
+| `enviar.whatsapp` | F1b | Envia pelo adaptador de canal, com checagem de número e ritmo |
+| `relatorio.whatsapp` | F1b | Resumo da execução para o cliente |
+| `compor.template` | F2 | Texto com variáveis e variações sorteadas. Sem IA, custo zero |
+| `aprovar` | F2 | Segura as mensagens até alguém aprovar (você, ou o cliente por WhatsApp) |
+| `relatorio.pdf` | F2 | Relatório em PDF, por execução ou mensal |
 | `esperar` / `se_respondeu` | F3 | Sequências e follow-up |
 | `drive.*` | F3 | Ler e salvar arquivos no Google Drive |
 
@@ -154,131 +160,167 @@ fontes:
 etapas:
   - filtrar: { telefone: preenchido, opt_out: false }
   - cruzar:  { lista: clientes.preferencias, com: produtos.nome, saida: produtos_match }
-  - filtrar: { produtos_match: nao_vazio }         # sem match = pulado, com motivo registrado
+  - filtrar: { produtos_match: nao_vazio }         # confirmado: só quem tem match recebe
   - compor.ia:
-      prompt: georgia-v4                           # enxuto: só persona, tom e estilo
+      prompt: fitlow-v4                            # enxuto: só persona, tom e estilo
       contexto: [apelido, produtos_match, observacao, saudacao, variacao, ultimas_mensagens: 2]
   - validar: { max_emojis: 2, proibidos: ["—"], somente_produtos_de: produtos }
   - enviar.whatsapp:
-      numero: fitlow                               # instância no Dex Provider
+      numero: fitlow
       intervalo: 40-120s
       janela: "09:00-19:00"
+relatorio:
+  whatsapp: { de: nvr, para: [dono_do_negocio] }
 ```
 
-O operador não escreve YAML: o painel gera isso a partir de um formulário. O YAML aparece aqui só para mostrar o que fica guardado.
+Você não escreve YAML: o painel gera isso a partir de um formulário. O YAML aparece aqui só para mostrar o que fica guardado.
 
 ---
 
 ## 7. Integração com o Dex Provider
 
-A Dex Automation **não fala com o Evolution direto** e **não guarda a chave do Evolution**. Por workspace, ela guarda apenas um token do Dex Provider e o ID da instância (número).
+**Situação:** ainda não se sabe se o Dex Provider expõe uma API. Por isso o motor depende só de uma interface `CanalWhatsApp`, com três implementações:
 
-Contrato mínimo necessário (a confirmar com o que o Dex Provider já expõe):
+| Adaptador | Uso | Observação |
+|---|---|---|
+| **Simulado** | Modo sombra e testes | Registra o que seria enviado e não envia nada |
+| **Dex Provider** | **Alvo** | Precisa da API abaixo. Se ela não existir, criamos dentro do Dex Provider |
+| **Evolution direto** | Plano B | Só se criar a API no Dex Provider atrasar. Custo: a chave do Evolution passa a ficar também na Dex Automation, e o controle de ritmo por número deixa de ser central |
+
+**Por que a API no Dex Provider é o melhor caminho:**
+- Só ele vê **todo o tráfego do número**, então o limite anti-bloqueio fica num lugar só.
+- As credenciais do Evolution ficam **em um único serviço**.
+- Ele recebe os webhooks do Evolution e **repassa para quem precisar**: a Dex Automation hoje, um atendimento ou chatbot amanhã.
+
+### Contrato proposto
 
 | Necessidade | Chamada (ilustrativa) | Fase |
 |---|---|---|
-| Listar números e status (conectado?) | `GET /instances` | F1 |
-| Verificar se os números têm WhatsApp | `POST /instances/{id}/check-numbers` → `[{number, exists, jid}]` | F1 |
-| Enviar texto | `POST /instances/{id}/messages/text` `{to, text, idempotencyKey}` → `{messageId}` | F1 |
-| Webhook de mensagem recebida | `POST {dex-automation}/webhooks/provider` | F2 (opt-out, follow-up) |
-| Webhook de status (entregue/lida) | mesmo endpoint | F2 (métricas) |
+| Listar números e status | `GET /instances` | F1b |
+| Verificar se os números têm WhatsApp | `POST /instances/{id}/check-numbers` → `[{number, exists, jid}]` | F1b |
+| Enviar texto | `POST /instances/{id}/messages/text` `{to, text, idempotencyKey}` → `{messageId}` | F1b |
+| Repassar mensagem recebida | Webhook `message.received` → Dex Automation (assinado com HMAC) | F2 |
+| Repassar status (entregue/lida) | Webhook `message.status` | F2 |
 | Enviar mídia | `POST /instances/{id}/messages/media` | F3 |
 
-**Ponto em aberto: quem controla o ritmo por número?** Se outras ferramentas também enviarem pelo mesmo número através do Dex Provider, o limite precisa morar no Provider, porque só ele vê todo o tráfego do número. Na v1, a Dex Automation controla o próprio ritmo; se o Provider já tiver fila ou limite, uso o dele.
+Autenticação: token de serviço no header, sempre por HTTPS.
+
+**Dependência:** para criar essa API é preciso o código do Dex Provider. Isso bloqueia **só a F1b**. A F1a roda inteira com o adaptador simulado.
 
 ---
 
-## 8. Modelo de dados (essencial)
+## 8. Relatórios
+
+**Para o cliente, por WhatsApp (F1b)**, enviado do número da NVR ao dono do negócio depois de cada execução. Exemplo ilustrativo:
+
+```
+FIT&LOW · Disparo de quarta (01/10)
+Produtos da semana: 3
+✅ Enviadas: 22 de 34 clientes
+
+Não enviadas: 12
+• 9 não têm produto da semana nas preferências
+• 2 sem número na planilha (linhas 26 e 35)
+• 1 número sem WhatsApp (linha 12)
+```
+
+O relatório mostra que o serviço está funcionando **e diz o que corrigir na planilha**. Assim a qualidade dos dados melhora sem você intermediar.
+
+**Para o cliente, em PDF (F2):** o mesmo conteúdo, mais as mensagens enviadas e um consolidado mensal.
+
+**Para você:** só nas exceções. Execução abortada, número desconectado, taxa de falha alta, IA reprovada várias vezes, planilha com coluna renomeada. Quando dá tudo certo, silêncio.
+
+---
+
+## 9. Modelo de dados (essencial)
 
 ```
 Workspace ─┬─ Conexao        dex_provider (token), google, llm — credenciais criptografadas
            ├─ Contato        telefone E.164, nome, apelido, atributos, tags, opt_out
-           ├─ Automacao      receita, gatilho, etapas (JSON), status, modo auto|revisão
-           │   └─ Execucao   status, início/fim, funil: lidos → válidos → match → gerados → enviados
+           ├─ Automacao      receita, gatilho, etapas (JSON), relatório, status
+           │   └─ Execucao   status, início/fim, funil (lidos → válidos → match → gerados
+           │                 → enviados), custo_ia, relatório_enviado
            │       └─ Mensagem  contato, texto, status, motivo, chave_idempotencia,
-           │                    versao_prompt, validacoes, variacao_usada,
+           │                    versao_prompt, validacoes, variacao_usada, custo,
            │                    provider_message_id, enviada_em
            ├─ OptOut
-           └─ Auditoria      quem ligou, pausou, editou ou aprovou
+           └─ RegistroAcao   ligou, pausou, editou, rodou manualmente (com data)
 ```
 
-`Mensagem` com status `enviada` substitui o `chatMemory`: é de lá que saem as últimas mensagens de cada contato e as variações já usadas.
-
 ---
 
-## 9. Entregabilidade (anti-bloqueio)
+## 10. Entregabilidade (anti-bloqueio)
 
-O Evolution usa a API **não oficial** do WhatsApp. Se o número for banido, a ferramenta deixa de servir para aquele cliente. Por isso a entregabilidade é requisito central, e não detalhe:
+O Evolution usa a API **não oficial** do WhatsApp. Se o número for banido, a ferramenta deixa de servir para aquele cliente.
 
-- Intervalo **aleatório** entre mensagens. Hoje ele é fixo em 61 s, um padrão fácil de detectar.
-- Janela de horário e dias permitidos. O que não couber na janela segue no próximo período.
-- Limite diário por número e **teto de frequência por contato, somando todas as automações** (ex.: no máximo 1 disparo de marketing a cada 3 dias).
-- Opt-out global por workspace ("SAIR", "PARAR"), que depende do webhook de entrada.
-- Checagem de número conectado antes e durante o disparo, com pausa automática se ele cair.
+- Intervalo **aleatório** entre mensagens, no lugar dos 61 s fixos de hoje.
+- Janela de horário e dias permitidos.
+- Limite diário por número e **teto de frequência por contato, somando todas as automações**.
+- Opt-out global por workspace ("SAIR", "PARAR"), que depende do webhook de entrada (F2).
+- Checagem de número conectado antes e durante o disparo, com pausa automática.
 - Pausa automática se a taxa de falha passar de um limite.
-- Simulação de "digitando…", se o Provider suportar.
 
 ---
 
-## 10. O que muda em relação ao fluxo n8n atual
+## 11. O que muda em relação ao fluxo n8n atual
 
 | Hoje | Efeito | No Dex Automation |
 |---|---|---|
-| A memória é gravada **antes** de verificar o número e enviar | Uma falha de envio vira "mensagem anterior" fantasma | O histórico só registra mensagens `enviada` |
-| O Agent já grava na memória e o Memory Manager grava de novo | Histórico provavelmente duplicado (vale conferir a tabela) | Uma fonte de verdade: a tabela `Mensagem` |
-| `verificaNumero` não checa `exists` | O fluxo tenta enviar para número sem WhatsApp | Só envia com `exists=true`; se não, pula e registra o motivo |
+| A memória é gravada **antes** de verificar o número e enviar | Uma falha vira "mensagem anterior" fantasma | O histórico só registra mensagens `enviada` |
+| O Agent grava na memória e o Memory Manager grava de novo | Histórico provavelmente duplicado | Uma fonte de verdade |
+| `verificaNumero` não checa `exists` | O fluxo tenta enviar para número sem WhatsApp | Só envia com `exists=true` |
 | O número é montado como `"55" + dígitos` | Um número que já tem 55 vira `5555…` | Normalização E.164 |
 | Não há idempotência | Reexecutar o fluxo manda de novo para todo mundo | Chave por contato e período |
-| Clientes sem match são descartados antes da IA | As regras "SEM MATCH" do prompt nunca são usadas, mas os tokens são pagos | Prompt enxuto; o comportamento sem match vira configuração explícita |
-| O prompt manda "consultar a tool chatMemory" | A memória não é uma tool no n8n: ela é injetada no contexto, e funciona por acaso | O histórico entra explicitamente no contexto |
-| Saudação, concordância, variação e emojis ficam com a IA, mais a tool Think | Mais chamadas, mais custo e erros ocasionais | Tudo calculado em código; a IA só redige |
-| O cruzamento é por texto exato | Grafias diferentes do mesmo produto não casam | Normalização + sinônimos (F1), depois catálogo de produtos com gênero (F2) |
-| Quem não tem número ou não casa com nenhum produto some em silêncio | Ninguém percebe o cliente esquecido | Relatório de qualidade em cada execução |
-| A chave do Evolution está fixa nos nós HTTP | Ela vaza junto com todo JSON exportado | A credencial fica só no Dex Provider |
+| O prompt tem regras "SEM MATCH", mas esses clientes são filtrados antes | Tokens pagos à toa | Regras removidas; o comportamento (só quem tem match recebe) foi mantido |
+| O prompt manda "consultar a tool chatMemory" | Funciona por acaso | O histórico entra explicitamente no contexto |
+| Saudação, concordância, variação e emojis ficam com a IA, mais a tool Think | Mais custo e erros ocasionais | Tudo calculado em código |
+| O cruzamento é por texto exato | Grafias diferentes do mesmo produto não casam | Normalização + sinônimos |
+| Quem é pulado some em silêncio | Ninguém percebe | Aparece no relatório, com o motivo |
+| A chave do Evolution está fixa nos nós HTTP | Ela vaza junto com todo export | A credencial fica só no Dex Provider |
 | O timeout da IA é de ~7 dias | Uma execução pode travar indefinidamente | Timeout curto + retry |
-
-Na planilha atual (34 clientes), encontrei:
-- 2 clientes sem número;
-- 1 nome duplicado;
-- 1 campo de Preferências com uma frase livre, que quebra a separação por vírgula;
-- o mesmo produto escrito de 3 formas diferentes;
-- observações com texto "da semana" gravado de forma fixa ("acabamos de fazer uma fornada…"), que a IA vai repetir toda semana como se fosse verdade.
-
-Para personalizar bem, a **estrutura dos dados** pesa tanto quanto o prompt. Proposta para a F2: um catálogo de produtos (nome, sinônimos, gênero, *semanal* ou *fixo*) e a separação entre "perfil permanente" e "contexto desta semana".
 
 ---
 
-## 11. Riscos
+## 12. Migração do FIT&LOW
+
+1. **Importar o histórico do n8n** (tabela `disparos_fit_e_low`) como mensagens anteriores. Assim a primeira execução real já varia em relação à última mensagem que o n8n mandou.
+2. **Modo sombra por 1–2 quartas:** o n8n continua enviando de verdade, a Dex Automation gera em paralelo e você compara as mensagens no painel.
+3. **Virada:** o n8n é desativado e o envio real é ativado. O fluxo n8n fica desligado, sem ser apagado, por 1 mês, como volta rápida.
+
+---
+
+## 13. Riscos
 
 | Risco | Prob. | Impacto | Mitigação |
 |---|---|---|---|
-| Banimento do número (API não oficial) | Média | Alto | §9. No longo prazo, o Dex Provider suportar a API oficial (Cloud API) como alternativa |
-| Contrato do Dex Provider ainda desconhecido | Alta | Alto | A F0 fecha o contrato antes de codar a integração |
-| Escopo virar "um n8n próprio" | Alta | Alto | Receitas; canvas visual fora do escopo até haver demanda comprovada |
-| Qualidade dos dados da planilha | Alta | Médio | Validação + relatório por execução + catálogo |
-| IA enviar algo errado para um cliente real | Média | Médio | Validação determinística + modo revisão + modo sombra na migração |
-| Você virar suporte de N clientes | Média | Médio | Funil por execução e alertas automáticos |
-| LGPD (dados pessoais + marketing) | Média | Médio | Opt-out, retenção de logs, isolamento por workspace |
+| Banimento do número (API não oficial) | Média | Alto | §10. No longo prazo, o Dex Provider suportar a API oficial |
+| Código do Dex Provider indisponível | Média | Alto | O adaptador isola o problema: a F1a não depende dele, e existe o plano B |
+| **Operador único:** tudo passa por você | Alta | Alto | Alertas só em exceção, relatório que orienta o cliente a corrigir a planilha, runbook por cliente |
+| **Receita pontual × custo recorrente:** a implantação é vendida uma vez, mas VPS, IA, suporte e risco de bloqueio são mensais | Alta | Médio | Chave de IA por cliente e custo medido por execução, para embasar uma mensalidade de operação |
+| Escopo virar "um n8n próprio" | Alta | Alto | Receitas; editor visual fora do escopo |
+| IA enviar algo errado para um cliente real | Média | Médio | Validação determinística + modo sombra |
+| LGPD | Média | Médio | Opt-out, retenção de logs, isolamento por workspace |
 
 ---
 
-## 12. Fases
+## 14. Fases
 
 | Fase | Entrega | Pronto quando |
 |---|---|---|
-| **F0** | Respostas da §13 + contrato do Dex Provider fechado | Contrato documentado |
-| **F1 – MVP** | Motor + agenda + fonte Sheets + `cruzar` + `compor.ia` + `validar` + envio via Provider + idempotência + funil/log + painel mínimo (automações, ligar/pausar, rodar agora, prévia, execuções, mensagens) | O FIT&LOW roda **em modo sombra** por 1–2 semanas (gera sem enviar, lado a lado com o n8n) e depois substitui o n8n |
-| **F2** | Aprovação humana, `compor.template` (disparo em massa), webhook de entrada + opt-out, catálogo de produtos, contatos nativos + tags, alertas | Um segundo cliente rodando |
-| **F3** | Sequências/follow-up, gatilhos externos, datas, mídia, Google Drive | — |
-| **F4** | Só se virar produto: autoatendimento, cobrança, permissões finas | — |
+| **F1a – Motor em modo sombra** | Motor, agenda, fonte Sheets, `cruzar`, `compor.ia`, `validar`, canal simulado, funil e log, custo por execução, importação do histórico do n8n, painel mínimo (login, workspaces, automações, ligar/pausar, rodar agora, prévia, execuções, mensagens) | O FIT&LOW gera em sombra toda quarta com qualidade igual ou melhor que a do n8n |
+| **F1b – Envio real** | API no Dex Provider (ou plano B), adaptador real, checagem de número, fila com ritmo e janela, relatório por WhatsApp, alertas | n8n do FIT&LOW desligado |
+| **F2 – Escala de clientes** | Clonar receita/automação entre clientes, `compor.template`, webhook de entrada + opt-out, catálogo de produtos, relatório PDF, aprovação | Segundo cliente implantado |
+| **F3** | Sequências, gatilhos externos, datas, mídia, Google Drive | — |
+
+**Fora do escopo:** login de clientes, cobrança, autoatendimento, editor visual.
 
 ---
 
-## 13. Perguntas em aberto
+## 15. Pendências
 
-1. **Dex Provider:** ele tem API HTTP? Quais endpoints existem hoje (enviar, checar número, status)? Como é a autenticação? Ele consegue enviar webhook de mensagens recebidas? Tem fila ou limite de envio próprio? Em que stack é feito e onde roda?
-2. **Quem opera:** só a NVR, para vários clientes, ou o cliente final também vai usar o painel?
-3. **Objetivo:** ferramenta interna da agência ou produto para vender?
-4. **Planilha:** ela continua sendo a interface do cliente, ou posso planejar a migração para o painel?
-5. **Clientes sem match:** é intencional que quem só gosta de itens do cardápio fixo (ex.: quiches) nunca receba mensagem?
-6. **Custo:** qual é a restrição de custo (infra, IA, desenvolvimento)?
+| # | Pendência | Bloqueia |
+|---|---|---|
+| P1 | Onde está o código do Dex Provider (repositório, quem fez, URL)? | F1b |
+| P2 | Hospedagem: mesma VPS do Evolution? Como é o deploy hoje (Docker, Easypanel, Portainer…)? | Deploy da F1a |
+| P3 | Relatório: de qual número sai (a NVR tem número conectado no Dex Provider?) e quem recebe no cliente | F1b |
+| P4 | Repositório: hoje está **público**; tornar privado antes de entrar código e prompts | F1a |
