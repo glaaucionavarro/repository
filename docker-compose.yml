@@ -1,0 +1,31 @@
+# Sobe o banco e a Dex Automation. Configure o .env antes (veja .env.example).
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: dex
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dex}
+      POSTGRES_DB: dex_automation
+    volumes:
+      - dados:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dex -d dex_automation"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://dex:${POSTGRES_PASSWORD:-dex}@db:5432/dex_automation
+    ports:
+      - "${PORTA_PUBLICA:-3000}:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  dados:

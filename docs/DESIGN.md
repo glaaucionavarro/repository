@@ -1,6 +1,6 @@
 # Dex Automation — Desenho da solução (v0.2)
 
-> **Status:** aguardando aprovação.
+> **Status:** aprovado. **F1a implementada** (modo sombra); veja o README para uso e deploy.
 > **O que mudou desde a v0.1:** entraram as respostas sobre operação (operador único, vários clientes), objetivo (ferramenta interna, a NVR vende a implantação), relatório para o cliente e integração com o Dex Provider (API a criar, se não existir).
 
 ---
@@ -35,7 +35,7 @@ Ferramenta **interna da NVR** para automações de mensagens via WhatsApp, opera
 | D4 | Memória de mensagens | **Log próprio das mensagens enviadas**, com gravação só depois do envio confirmado | Elimina o histórico "fantasma" do fluxo atual |
 | D5 | Clientes e acesso | **Workspaces isolados, um login de administrador**, sem permissões | Reflete a operação real: só você usa |
 | D6 | Fonte de dados | **Google Sheets como conector**, com validação | A rotina do cliente não muda |
-| D7 | Fila e agenda | **No próprio Postgres** (pg-boss) | Menos peças para operar |
+| D7 | Fila e agenda | **No próprio Postgres**, sobre a tabela de execuções (`FOR UPDATE SKIP LOCKED`) | Menos peças para operar; a execução já é o "job". Troca feita na F1a: pg-boss não era necessário |
 | D8 | Canal WhatsApp | **Atrás de um adaptador:** simulado / Dex Provider / Evolution direto | O motor não depende de o Dex Provider estar pronto (§7) |
 | D9 | IA | **Provedor plugável, com chave por workspace**, e custo registrado por execução | O cliente paga o próprio consumo, e você sabe quanto cada cliente custa |
 | D10 | Relatórios | **Resumo por WhatsApp, enviado do número da NVR**; PDF na F2 | O relatório é a prova de valor que o cliente vê (§8) |

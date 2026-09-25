@@ -1,0 +1,162 @@
+{
+  "workspace": {
+    "slug": "exemplo",
+    "nome": "Cliente Exemplo",
+    "fuso": "America/Sao_Paulo"
+  },
+  "automacao": {
+    "nome": "Disparo semanal",
+    "receita": "disparo_recorrente_ia",
+    "agenda_cron": "0 10 * * 3",
+    "config": {
+      "guardas": {
+        "chavePlanilha": {
+          "planilha": "COLE_AQUI_O_ID_DA_PLANILHA",
+          "aba": "Status",
+          "coluna": "Status",
+          "valor": "ON"
+        }
+      },
+      "fontes": {
+        "contatos": {
+          "planilha": "COLE_AQUI_O_ID_DA_PLANILHA",
+          "aba": "Clientes",
+          "colunas": {
+            "nome": "Nome",
+            "telefone": "Número",
+            "preferencias": "Preferências",
+            "observacao": "Observação"
+          }
+        },
+        "produtos": {
+          "planilha": "COLE_AQUI_O_ID_DA_PLANILHA",
+          "aba": "Produtos",
+          "colunas": {
+            "nome": "Produtos da Semana"
+          }
+        }
+      },
+      "contatos": "contatos",
+      "etapas": [
+        {
+          "tipo": "apelido",
+          "campoNome": "nome",
+          "campoObservacao": "observacao"
+        },
+        {
+          "tipo": "cruzar",
+          "campo": "preferencias",
+          "fonte": "produtos",
+          "campoFonte": "nome",
+          "saida": "produtos_match",
+          "sinonimos": {
+            "Bolo no pote de frutas vermelhas": [
+              "Bolo de pote de frutas vermelhas"
+            ]
+          }
+        },
+        {
+          "tipo": "filtrar",
+          "campo": "produtos_match",
+          "op": "lista_nao_vazia",
+          "motivo": "sem produto da semana nas preferências",
+          "rotulo": "com produto da semana nas preferências"
+        }
+      ],
+      "composicao": {
+        "tipo": "ia",
+        "modelo": "gpt-4.1",
+        "versao": "v1",
+        "promptSistema": "Você escreve mensagens de WhatsApp em nome de [NOME DO NEGÓCIO] para clientes que já conhecem a marca.\n\nTom: próximo, caloroso e natural, como uma conversa entre conhecidos. Sem pressão de venda.\n\nFormato:\nLinha 1: o cumprimento pedido + 1 emoji.\nLinha em branco.\nCorpo em um parágrafo: apresentação dos produtos, conexão pessoal e fechamento.\nLinha em branco.\nLinha final: 1 emoji.\n\nNunca:\n- Mencionar produtos que não foram informados para este cliente.\n- Pressionar, criar urgência ou inventar promoções, preços e prazos.\n- Usar travessões ou mais de 2 emojis.",
+        "promptUsuario": "Cliente:\n- Nome: {{nome}} (chame de {{apelido}})\n- Produtos desta semana que ele(a) gosta: {{produtos_match}}\n- Observação: {{observacao}}\n\nA mensagem sai {{dia_semana}}, {{data}}, às {{hora}}.\n\nMonte a mensagem assim:\n1. Comece exatamente com: \"{{variacao.cumprimento}}\" e coloque um emoji logo depois.\n2. No corpo, apresente os produtos inspirando-se em \"{{variacao.apresentacao}}\" e faça a conexão pessoal com \"{{variacao.conexao}}\".\n3. Feche inspirando-se em \"{{variacao.fechamento}}\", ajustando gênero e número ao(s) produto(s).\n\nMensagens enviadas antes a este cliente (a sua precisa ter estrutura diferente delas):\n{{historico}}\n\nResponda somente com o texto da mensagem.",
+        "historico": 2,
+        "variacoes": {
+          "cumprimento": {
+            "exigirInicio": true,
+            "opcoes": [
+              "Oi {{apelido}}! {{saudacao}} Tudo bem?",
+              "Ei {{apelido}}! {{saudacao}} Tudo bem?",
+              "Oieee {{apelido}}! {{saudacao}} Tudo bem?"
+            ]
+          },
+          "apresentacao": {
+            "opcoes": [
+              "essa semana temos {{produtos_match}} disponível!",
+              "no menu dessa semana temos {{produtos_match}}!",
+              "essa semana tem {{produtos_match}} no nosso menu!",
+              "temos {{produtos_match}} essa semana!",
+              "passando para avisar que essa semana temos {{produtos_match}}!",
+              "já está disponível no menu dessa semana: {{produtos_match}}!",
+              "essa semana chegou a vez de {{produtos_match}} brilhar no menu!",
+              "pra deixar sua semana ainda mais gostosa, trouxemos {{produtos_match}} no menu!"
+            ]
+          },
+          "conexao": {
+            "opcoes": [
+              "Sei que você adora",
+              "Lembrei que você gosta",
+              "Como sei que você adora",
+              "Sei que você ama",
+              "Lembrei que você adora"
+            ]
+          },
+          "fechamento": {
+            "opcoes": [
+              "Se quiser garantir o seu, é só me avisar!",
+              "Se quiser garantir a sua, é só me chamar aqui que já deixo reservado para você!",
+              "Se quiser garantir o seu, é só me chamar!",
+              "Se quiser garantir o seu, me chama aqui pra gente já deixar essa delícia reservada pra você!",
+              "Se quiser aproveitar essa e outras delícias, é só me chamar!",
+              "Me chama aqui se quiser garantir o seu!",
+              "Me chama aqui se quiser, que já deixo o seu separado!"
+            ]
+          }
+        }
+      },
+      "validacao": {
+        "maxEmojis": 2,
+        "proibidos": [
+          "tenho ótimas notícias",
+          "estou aqui para"
+        ],
+        "somenteItensDe": {
+          "permitidos": "produtos_match",
+          "universo": [
+            {
+              "fonte": "produtos",
+              "campo": "nome"
+            },
+            {
+              "fonte": "contatos",
+              "campo": "preferencias",
+              "lista": true
+            }
+          ]
+        },
+        "diferenteDaUltima": true,
+        "semTravessao": true
+      },
+      "envio": {
+        "canal": "simulado",
+        "intervaloSeg": [
+          40,
+          120
+        ],
+        "janela": {
+          "inicio": "09:00",
+          "fim": "19:00"
+        },
+        "dias": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ]
+      },
+      "periodo": "semana",
+      "previaLimite": 5
+    }
+  }
+}
