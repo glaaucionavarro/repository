@@ -4,7 +4,7 @@ import { iguaisSeguro } from '../lib/cripto.js';
 
 const COOKIE = 'dex_sessao';
 const DURACAO_MS = 7 * 24 * 3_600_000;
-const LIVRES = ['/login', '/saude', '/static/'];
+const LIVRES = ['/login', '/saude', '/static/', '/tarefas/tick'];
 
 export interface OpcoesAuth {
   senha: string;

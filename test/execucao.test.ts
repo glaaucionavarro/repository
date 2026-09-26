@@ -9,7 +9,7 @@ import { dataNoFuso, partesNoFuso } from '../src/lib/tempo.js';
 import { executar, type Dependencias } from '../src/motor/execucao.js';
 import { cicloAgenda } from '../src/worker/agenda.js';
 import { recuperarTravadas, reivindicar } from '../src/worker/fila.js';
-import { bancoDisponivel, configTeste, dadosPlanilha, LLMFalso, prepararBanco, type Resposta } from './ajuda.js';
+import { bancoDisponivel, configTeste, dadosPlanilha, LLMFalso, prepararBanco, respostaPadrao } from './ajuda.js';
 
 const SEGREDO = 's'.repeat(32);
 const SP = 'America/Sao_Paulo';
@@ -248,6 +248,53 @@ describe.skipIf(!disponivel)('execução (Postgres)', () => {
     expect(r.execucao.funil.status.simulada).toBe(3);
     const planejados = r.mensagens.filter((m: any) => m.agendada_para && m.nome !== 'Ana Souza');
     for (const m of planejados) expect(m.agendada_para.getTime()).toBeGreaterThan(AGORA.getTime());
+  });
+
+  it('pausa quando o prazo acaba e retoma de onde parou, sem gastar tentativa', async () => {
+    const automacao = await criarAutomacao(
+      configTeste({ composicao: { ...configTeste().composicao, paralelismo: 1 } }),
+    );
+    const { rows } = await db.query<{ id: string }>(
+      `INSERT INTO execucoes (automacao_id, tipo, status, tentativas) VALUES ($1, 'manual', 'preparando', 1) RETURNING id`,
+      [automacao],
+    );
+    const id = rows[0]!.id;
+    // A IA "demora": depois da primeira mensagem, o prazo já passou
+    let prazo = new Date(Date.now() + 60_000);
+    const lenta = new LLMFalso((p, n) => {
+      if (n === 1) prazo.setTime(Date.now() - 1);
+      return respostaPadrao(p);
+    });
+    await executar(id, { ...deps(lenta), prazo });
+    let r = await carregar(id);
+    expect(r.execucao).toMatchObject({ status: 'pendente', tentativas: 0, finalizada_em: null });
+    expect(r.mensagens.filter((m: any) => m.status === 'gerada')).toHaveLength(1);
+
+    const llm = new LLMFalso();
+    await executar(id, { ...deps(llm), prazo: new Date(Date.now() + 60_000) });
+    r = await carregar(id);
+    expect(llm.pedidos).toHaveLength(2);
+    expect(r.execucao.status).toBe('concluida');
+    expect(r.execucao.funil.status).toEqual({ pulada: 4, simulada: 3 });
+  });
+
+  it('processarFila pega pendentes, respeita o prazo e o tick cria as agendadas', async () => {
+    const { processarFila, tick } = await import('../src/worker/tick.js');
+    const automacao = await criarAutomacao(configTeste(), { cron: '* * * * *' });
+    await db.query(`INSERT INTO execucoes (automacao_id, tipo) VALUES ($1, 'manual')`, [automacao]);
+    expect(await processarFila(deps(new LLMFalso()), new Date(Date.now() + 1000))).toBe(0);
+    expect(await processarFila(deps(new LLMFalso()), new Date(Date.now() + 120_000))).toBe(1);
+
+    const r = await tick({ ...deps(new LLMFalso()), agora: () => new Date() }, new Date(Date.now() + 120_000));
+    expect(r.agendadas).toBe(1);
+    const { rows } = await db.query(`SELECT tipo, status FROM execucoes WHERE automacao_id = $1 ORDER BY criado_em`, [automacao]);
+    expect(rows.map((x: any) => `${x.tipo}:${x.status}`)).toEqual(['manual:concluida', 'agendada:concluida']);
+  });
+
+  it('migrações simultâneas não se atropelam', async () => {
+    const { migrar } = await import('../src/db/migrar.js');
+    const resultados = await Promise.all([migrar(db), migrar(db), migrar(db)]);
+    expect(resultados.flat()).toEqual([]);
   });
 
   it('execução agendada de automação pausada é abortada', async () => {

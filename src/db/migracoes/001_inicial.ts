@@ -1,3 +1,5 @@
+// Esquema inicial (F1a). Nunca altere uma migração já aplicada: crie a próxima.
+export default `
 -- Dex Automation: esquema inicial (F1a)
 
 CREATE TABLE workspaces (
@@ -99,3 +101,4 @@ CREATE TABLE registro_acoes (
   criado_em     timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX registro_acoes_automacao ON registro_acoes (automacao_id, criado_em DESC);
+`;

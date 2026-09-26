@@ -1,3 +1,4 @@
+/** @jsxImportSource hono/jsx */
 import { Aviso, Layout } from '../componentes.js';
 
 export const Login = ({ erro, voltar }: { erro?: string; voltar?: string }) => (

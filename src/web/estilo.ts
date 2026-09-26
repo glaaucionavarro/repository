@@ -1,3 +1,5 @@
+// Folha de estilo do painel. Fica no código (e não num arquivo .css) para ir junto no deploy serverless.
+export const CSS = `
 :root {
   --fundo: #f6f7f9;
   --superficie: #ffffff;
@@ -154,3 +156,4 @@ pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; background
   }
   .empilhar td.sem-rotulo-celular::before { display: none; }
 }
+`;

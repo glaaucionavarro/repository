@@ -1,0 +1,5 @@
+test
+seeds/local
+docs
+Dockerfile
+docker-compose.yml

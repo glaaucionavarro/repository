@@ -8,9 +8,9 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "node dist/src/index.js",
-    "build": "tsc -p tsconfig.build.json && cp -r migrations dist/ && cp -r src/web/static dist/src/web/",
+    "dev": "tsx watch src/processo.ts",
+    "start": "node dist/src/processo.js",
+    "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "migrar": "tsx src/cli/migrar.ts",
@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",
+    "@vercel/functions": "^3.9.9",
     "croner": "^10.0.1",
     "hono": "^4.13.9",
     "pg": "^8.23.0",

@@ -31,6 +31,11 @@ export interface Dependencias {
   agora?: () => Date;
   aleatorio?: Aleatorio;
   log?: (mensagem: string) => void;
+  /**
+   * Hora-limite para começar a gerar mensagens novas. Passou dela, a execução pausa e volta para a fila;
+   * o próximo tick continua de onde parou. Usado no serverless, onde cada chamada tem tempo máximo.
+   */
+  prazo?: Date;
 }
 
 /** Interrompe a execução sem ser um erro do sistema (guarda desligada, planilha quebrada, chave inválida…). */
@@ -84,6 +89,14 @@ export async function executar(execucaoId: string, deps: Dependencias): Promise<
 
   try {
     const etapas = await processar(ctx, deps);
+    if (etapas.pausada) {
+      await db.query(
+        `UPDATE execucoes SET status = 'pendente', tentativas = greatest(tentativas - 1, 0), heartbeat_em = NULL WHERE id = $1`,
+        [execucaoId],
+      );
+      log(`execução ${execucaoId} pausada pelo prazo; continua no próximo ciclo`);
+      return;
+    }
     const funil = await montarFunil(db, execucaoId, etapas.etapas, etapas.previaLimitada);
     await db.query(
       `UPDATE execucoes SET status = 'concluida', finalizada_em = now(), funil = $2, motivo = NULL WHERE id = $1`,
@@ -131,7 +144,13 @@ async function verificarChavePlanilha(config: AutomacaoConfig, planilhas: Leitor
   }
 }
 
-async function processar(ctx: Contexto, deps: Dependencias): Promise<{ etapas: EtapaFunil[]; previaLimitada?: number }> {
+interface ResultadoProcessamento {
+  etapas: EtapaFunil[];
+  previaLimitada?: number;
+  pausada?: boolean;
+}
+
+async function processar(ctx: Contexto, deps: Dependencias): Promise<ResultadoProcessamento> {
   const { db } = deps;
   const agora = deps.agora ?? (() => new Date());
   const aleatorio = deps.aleatorio ?? Math.random;
@@ -267,8 +286,14 @@ async function processar(ctx: Contexto, deps: Dependencias): Promise<{ etapas: E
   const qtdHistorico = Math.max(config.composicao.historico, config.validacao.diferenteDaUltima ? 1 : 0);
 
   let cancelar = false;
+  let pausada = false;
+  const prazoEsgotado = () => deps.prazo !== undefined && Date.now() >= deps.prazo.getTime();
   await emParalelo(aCompor, config.composicao.paralelismo, async (item, i) => {
     if (cancelar) return;
+    if (prazoEsgotado()) {
+      pausada = true;
+      return;
+    }
     const horario = horarios[i]!;
     const historico = precisaHistorico ? await buscarHistorico(db, ctx.workspace_id, item.telefone!, qtdHistorico) : [];
     const p = partesNoFuso(horario, ctx.fuso);
@@ -329,6 +354,8 @@ async function processar(ctx: Contexto, deps: Dependencias): Promise<{ etapas: E
       [ctx.id, resultado.tokensEntrada, resultado.tokensSaida, resultado.custo ?? 0],
     );
   });
+
+  if (pausada) return { etapas, previaLimitada, pausada: true };
 
   // ---- Disparo (modo sombra: nada sai, só registra)
   if (!previa) {

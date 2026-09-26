@@ -188,3 +188,49 @@ describe.skipIf(!disponivel)('redirecionamento do login', () => {
     await db.end();
   });
 });
+
+describe.skipIf(!disponivel)('modo serverless', () => {
+  it('sem variáveis de ambiente, mostra o que falta em vez de cair', async () => {
+    const { criarAppServerless } = await import('../src/aplicacao.js');
+    const app = criarAppServerless({});
+    const r = await app.request('/qualquer');
+    expect(r.status).toBe(500);
+    const html = await r.text();
+    expect(html).toContain('Configuração incompleta');
+    expect(html).toContain('DATABASE_URL');
+    expect(html).toContain('APP_SECRET');
+  });
+
+  it('migra na primeira requisição e protege o tick com o CRON_SECRET', async () => {
+    const { criarAppServerless } = await import('../src/aplicacao.js');
+    const { URL_TESTE } = await import('./ajuda.js');
+    const admin = new (await import('pg')).default.Client({ connectionString: URL_TESTE });
+    await admin.connect();
+    await admin.query('DROP SCHEMA IF EXISTS teste_serverless CASCADE; CREATE SCHEMA teste_serverless');
+    await admin.end();
+    const url = new URL(URL_TESTE);
+    url.searchParams.set('options', '-c search_path=teste_serverless');
+    const env = {
+      DATABASE_URL: url.toString(),
+      APP_SECRET: SEGREDO,
+      ADMIN_PASSWORD: SENHA,
+      CRON_SECRET: 'segredo-do-cron-123456',
+      VERCEL: '1',
+    };
+    const emSegundoPlano: Promise<unknown>[] = [];
+    const app = criarAppServerless(env, (p) => emSegundoPlano.push(p));
+
+    expect((await app.request('/saude', { headers: { host: 'x' } })).status).toBe(200);
+    expect((await app.request('/tarefas/tick', { headers: { host: 'x' } })).status).toBe(401);
+    const ok = await app.request('/tarefas/tick', { headers: { host: 'x', authorization: 'Bearer segredo-do-cron-123456' } });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({ agendadas: 0, processadas: 0 });
+
+    const login = await app.request('/login', {
+      method: 'POST',
+      body: new URLSearchParams({ senha: SENHA }),
+      headers: { 'content-type': 'application/x-www-form-urlencoded', host: 'x' },
+    });
+    expect(login.headers.get('set-cookie')).toContain('Secure');
+  });
+});

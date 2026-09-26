@@ -1,3 +1,4 @@
+/** @jsxImportSource hono/jsx */
 import { formatarTelefone } from '../../lib/telefone.js';
 import { formatarDataHora } from '../../lib/tempo.js';
 import { MOTIVOS } from '../../motor/itens.js';

@@ -6,8 +6,8 @@ pg.types.setTypeParser(pg.types.builtins.INT8, (v) => Number(v));
 
 export type Db = pg.Pool;
 
-export function criarPool(url: string): Db {
-  return new pg.Pool({ connectionString: url, max: 10 });
+export function criarPool(url: string, max = 10): Db {
+  return new pg.Pool({ connectionString: url, max, idleTimeoutMillis: 10_000 });
 }
 
 export async function emTransacao<T>(db: Db, fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {

@@ -39,7 +39,7 @@ Ferramenta **interna da NVR** para automações de mensagens via WhatsApp, opera
 | D8 | Canal WhatsApp | **Atrás de um adaptador:** simulado / Dex Provider / Evolution direto | O motor não depende de o Dex Provider estar pronto (§7) |
 | D9 | IA | **Provedor plugável, com chave por workspace**, e custo registrado por execução | O cliente paga o próprio consumo, e você sabe quanto cada cliente custa |
 | D10 | Relatórios | **Resumo por WhatsApp, enviado do número da NVR**; PDF na F2 | O relatório é a prova de valor que o cliente vê (§8) |
-| D11 | Stack | **TypeScript/Node + Postgres + painel web, em Docker na VPS** (premissa) | Mesma linguagem do Evolution e do n8n |
+| D11 | Stack e hospedagem | **TypeScript/Node + Postgres + painel web. Produção na Vercel (Pro) com Postgres Neon**; Docker continua suportado | Vercel é onde a NVR já publica. Sem processo contínuo, agenda e fila viram um cron por minuto (`/tarefas/tick`) e as execuções pausam/retomam dentro do limite de tempo das funções |
 
 ---
 

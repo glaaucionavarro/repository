@@ -1,3 +1,4 @@
+/** @jsxImportSource hono/jsx */
 import { mascarar } from '../../lib/cripto.js';
 import { formatarDataHora } from '../../lib/tempo.js';
 import { descreverCron } from '../../worker/agenda.js';

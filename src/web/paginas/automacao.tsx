@@ -1,3 +1,4 @@
+/** @jsxImportSource hono/jsx */
 import { formatarDataHora } from '../../lib/tempo.js';
 import type { AutomacaoConfig } from '../../motor/config.js';
 import { DISPARO_IA, RECEITAS, type FormDisparoIA } from '../../motor/receitas.js';

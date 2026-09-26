@@ -1,54 +1,39 @@
-import { readdir, readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { MIGRACOES } from './migracoes/index.js';
 import type { Db } from './pool.js';
 
-async function pastaMigracoes(): Promise<string> {
-  // Funciona tanto com tsx (src/db) quanto compilado (dist/src/db)
-  let dir = dirname(fileURLToPath(import.meta.url));
-  for (let i = 0; i < 4; i++) {
-    const candidato = join(dir, 'migrations');
-    try {
-      await readdir(candidato);
-      return candidato;
-    } catch {
-      dir = dirname(dir);
-    }
-  }
-  throw new Error('Pasta migrations/ não encontrada');
-}
-
-/** Aplica as migrações pendentes, em ordem, cada uma em sua transação. */
+/**
+ * Aplica as migrações pendentes numa única transação.
+ * O lock é de transação (pg_advisory_xact_lock), e não de sessão, para funcionar atrás de poolers
+ * em modo transação (Neon, PgBouncer): um lock de sessão poderia nunca ser liberado.
+ */
 export async function migrar(db: Db, log: (m: string) => void = () => {}): Promise<string[]> {
-  const pasta = await pastaMigracoes();
-  const arquivos = (await readdir(pasta)).filter((f) => f.endsWith('.sql')).sort();
   const cliente = await db.connect();
   const aplicadas: string[] = [];
   try {
-    await cliente.query('SELECT pg_advisory_lock(727001)');
+    await cliente.query('BEGIN');
+    await cliente.query('SELECT pg_advisory_xact_lock(727001)');
     await cliente.query(
       'CREATE TABLE IF NOT EXISTS schema_migracoes (nome text PRIMARY KEY, aplicada_em timestamptz NOT NULL DEFAULT now())',
     );
     const { rows } = await cliente.query<{ nome: string }>('SELECT nome FROM schema_migracoes');
     const feitas = new Set(rows.map((r) => r.nome));
-    for (const arquivo of arquivos) {
-      if (feitas.has(arquivo)) continue;
-      const sql = await readFile(join(pasta, arquivo), 'utf8');
-      await cliente.query('BEGIN');
+    for (const m of MIGRACOES) {
+      if (feitas.has(m.nome)) continue;
       try {
-        await cliente.query(sql);
-        await cliente.query('INSERT INTO schema_migracoes (nome) VALUES ($1)', [arquivo]);
-        await cliente.query('COMMIT');
+        await cliente.query(m.sql);
       } catch (e) {
-        await cliente.query('ROLLBACK');
-        throw new Error(`Falha na migração ${arquivo}: ${(e as Error).message}`);
+        throw new Error(`Falha na migração ${m.nome}: ${(e as Error).message}`);
       }
-      aplicadas.push(arquivo);
-      log(`migração aplicada: ${arquivo}`);
+      await cliente.query('INSERT INTO schema_migracoes (nome) VALUES ($1)', [m.nome]);
+      aplicadas.push(m.nome);
     }
+    await cliente.query('COMMIT');
+  } catch (e) {
+    await cliente.query('ROLLBACK').catch(() => {});
+    throw e;
   } finally {
-    await cliente.query('SELECT pg_advisory_unlock(727001)').catch(() => {});
     cliente.release();
   }
+  for (const nome of aplicadas) log(`migração aplicada: ${nome}`);
   return aplicadas;
 }

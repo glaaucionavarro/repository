@@ -1,15 +1,15 @@
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+/** @jsxImportSource hono/jsx */
 import { Hono, type Context } from 'hono';
 import { secureHeaders } from 'hono/secure-headers';
 import type { Config } from '../config.js';
 import type { Db } from '../db/pool.js';
-import { cifrar, decifrar } from '../lib/cripto.js';
+import { cifrar, decifrar, iguaisSeguro } from '../lib/cripto.js';
 import { chavePeriodo, fusoValido } from '../lib/tempo.js';
 import { ErroConfig, lerConfig } from '../motor/config.js';
+import type { Dependencias } from '../motor/execucao.js';
 import { configParaForm, DISPARO_IA, formPadrao, formParaConfig, type FormDisparoIA } from '../motor/receitas.js';
 import { lerCronSimples, montarCron, proximoHorario } from '../worker/agenda.js';
+import { processarFila, tick } from '../worker/tick.js';
 import { exigirLogin, loginBloqueado, ipDe, mesmaOrigem, sair, tentarLogin } from './auth.js';
 import {
   automacaoPorId,
@@ -25,8 +25,7 @@ import { EditorJson, FormAutomacao, PaginaAutomacao } from './paginas/automacao.
 import { PaginaExecucao } from './paginas/execucao.js';
 import { Login } from './paginas/login.js';
 import { ListaWorkspaces, PaginaWorkspace } from './paginas/workspaces.js';
-
-const CSS = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'static', 'app.css'), 'utf8');
+import { CSS } from './estilo.js';
 
 type Corpo = Record<string, string | File | (string | File)[]>;
 const texto = (c: Corpo, nome: string) => {
@@ -71,12 +70,20 @@ function validarFormDisparo(f: FormDisparoIA, fuso: string): { config: unknown; 
 
 export interface OpcoesApp {
   db: Db;
-  config: Pick<Config, 'adminPassword' | 'appSecret' | 'cookieSeguro'>;
+  config: Pick<Config, 'adminPassword' | 'appSecret' | 'cookieSeguro'> &
+    Partial<Pick<Config, 'cronSecret' | 'tickOrcamentoSeg'>>;
+  /** Dependências do motor; necessárias para /tarefas/tick e para o processamento imediato */
+  deps?: Dependencias;
+  /** Roda antes de cada requisição (ex.: migrações na primeira chamada do serverless) */
+  preparar?: () => Promise<void>;
+  /** Serverless: continua um trabalho depois da resposta (waitUntil da Vercel) */
+  emSegundoPlano?: (p: Promise<unknown>) => void;
 }
 
-export function criarApp({ db, config }: OpcoesApp): Hono {
+export function criarApp({ db, config, deps, preparar, emSegundoPlano }: OpcoesApp): Hono {
   const app = new Hono();
   const auth = { senha: config.adminPassword, segredo: config.appSecret, cookieSeguro: config.cookieSeguro };
+  const orcamentoMs = (config.tickOrcamentoSeg ?? 240) * 1000;
 
   app.use(
     '*',
@@ -89,6 +96,12 @@ export function criarApp({ db, config }: OpcoesApp): Hono {
     }),
   );
   app.use('*', mesmaOrigem());
+  if (preparar) {
+    app.use('*', async (c, next) => {
+      if (c.req.path !== '/static/app.css') await preparar();
+      await next();
+    });
+  }
   app.use('*', exigirLogin(auth));
 
   app.onError((e, c) => {
@@ -104,6 +117,16 @@ export function criarApp({ db, config }: OpcoesApp): Hono {
     c.header('content-type', 'text/css; charset=utf-8');
     c.header('cache-control', 'public, max-age=3600');
     return c.body(CSS);
+  });
+
+  // ---- Cron (serverless): agenda + fila. Na Vercel, o cron manda "Authorization: Bearer <CRON_SECRET>".
+  app.get('/tarefas/tick', async (c) => {
+    if (!deps || !config.cronSecret) return c.text('Tick desativado: defina CRON_SECRET.', 404);
+    if (!iguaisSeguro(c.req.header('authorization') ?? '', `Bearer ${config.cronSecret}`)) {
+      return c.text('Não autorizado', 401);
+    }
+    const resultado = await tick(deps, new Date(Date.now() + orcamentoMs));
+    return c.json(resultado);
   });
 
   // ---- Login
@@ -340,6 +363,8 @@ export function criarApp({ db, config }: OpcoesApp): Hono {
       workspaceId: a.workspace_id,
       automacaoId: a.id,
     });
+    // Serverless não tem worker contínuo: começa agora, depois da resposta, em vez de esperar o próximo tick
+    if (emSegundoPlano && deps) emSegundoPlano(processarFila(deps, new Date(Date.now() + orcamentoMs)));
     return c.redirect(`/e/${rows[0]!.id}`);
   };
   app.post('/a/:id/rodar', (c) => enfileirar(c, 'manual'));
@@ -352,5 +377,27 @@ export function criarApp({ db, config }: OpcoesApp): Hono {
     return c.html(<PaginaExecucao e={e} mensagens={await mensagensDaExecucao(db, e.id)} filtro={c.req.query('status')} />);
   });
 
+  return app;
+}
+
+/** Quando as variáveis de ambiente estão erradas: mostra o que falta (sem valores) em vez de cair. */
+export function criarAppDeErro(mensagem: string): Hono {
+  const app = new Hono();
+  app.all('*', (c) =>
+    c.html(
+      <html lang="pt-BR">
+        <head>
+          <meta charset="utf-8" />
+          <title>Configuração incompleta · Dex Automation</title>
+        </head>
+        <body style="font-family: system-ui, sans-serif; max-width: 640px; margin: 10vh auto; padding: 0 16px">
+          <h1>Configuração incompleta</h1>
+          <p>Ajuste as variáveis de ambiente do projeto e publique de novo:</p>
+          <pre style="white-space: pre-wrap; background: #f4f4f5; padding: 12px; border-radius: 8px">{mensagem}</pre>
+        </body>
+      </html>,
+      500,
+    ),
+  );
   return app;
 }
